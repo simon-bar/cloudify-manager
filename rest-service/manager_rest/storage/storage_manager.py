@@ -88,7 +88,12 @@ class SQLStorageManager(object):
                 query = query.order_by(column)
         return query
 
-    def _filter_query(self, query, model_class, filters, all_tenants):
+    def _filter_query(self,
+                      query,
+                      model_class,
+                      filters,
+                      all_tenants,
+                      include_global):
         """Add filter clauses to the query
 
         :param query: Base SQL query
@@ -97,7 +102,10 @@ class SQLStorageManager(object):
         of such values)
         :return: An SQLAlchemy AppenderQuery object
         """
-        query = self._add_tenant_filter(query, model_class, all_tenants)
+        query = self._add_tenant_filter(query,
+                                        model_class,
+                                        all_tenants,
+                                        include_global)
         query = self._add_permissions_filter(query, model_class)
         query = self._add_value_filter(query, filters)
         return query
@@ -141,7 +149,11 @@ class SQLStorageManager(object):
 
         return column, value
 
-    def _add_tenant_filter(self, query, model_class, all_tenants):
+    def _add_tenant_filter(self,
+                           query,
+                           model_class,
+                           all_tenants,
+                           include_global):
         """Filter by the tenant ID associated with `model_class` (either
         directly via a relationship with the tenants table, or via an
         ancestor who has such a relationship)
@@ -163,11 +175,15 @@ class SQLStorageManager(object):
         else:
             tenant_ids = [self.current_tenant.id]
 
-        # Match any of the applicable tenant ids or if it's a global resource
-        tenant_filter = sql_or(
-            model_class.resource_availability == AvailabilityState.GLOBAL,
-            model_class._tenant_id.in_(tenant_ids)
-        )
+        # Match any of the applicable tenant ids
+        tenant_filter = model_class._tenant_id.in_(tenant_ids)
+
+        if include_global:
+            # Additionally match if it's a global resource
+            tenant_filter = sql_or(
+                model_class.resource_availability == AvailabilityState.GLOBAL,
+                tenant_filter
+            )
         return query.filter(tenant_filter)
 
     @staticmethod
@@ -241,7 +257,8 @@ class SQLStorageManager(object):
                    include=None,
                    filters=None,
                    sort=None,
-                   all_tenants=None):
+                   all_tenants=None,
+                   include_global=True):
         """Get an SQL query object based on the params passed
 
         :param model_class: SQL DB table class
@@ -259,7 +276,11 @@ class SQLStorageManager(object):
         )
 
         query = self._get_base_query(model_class, include, joins)
-        query = self._filter_query(query, model_class, filters, all_tenants)
+        query = self._filter_query(query,
+                                   model_class,
+                                   filters,
+                                   all_tenants,
+                                   include_global)
         query = self._sort_query(query, sort)
         return query
 
@@ -359,16 +380,24 @@ class SQLStorageManager(object):
         if not instance.is_resource or not instance.is_id_unique:
             return
 
-        filters = {'id': instance.id, '_tenant_id': self.current_tenant.id}
+        query = self._get_query(instance.__class__,
+                                filters={'id': instance.id})
+        unique_resource_filter = sql_or(
+            instance.__class__._tenant_id == self.current_tenant.id,
+            instance.__class__.resource_availability == AvailabilityState.GLOBAL
+        )
+        query.filter(unique_resource_filter)
+        results = query.all()
 
-        # There should be only one instance with this id on this tenant
-        if len(self.list(instance.__class__, filters=filters)) != 1:
+        # There should be only one instance with this id on this tenant or
+        # in another if the resource is global
+        if len(results) != 1:
             # Delete the newly added instance, and raise an error
             db.session.delete(instance)
             self._safe_commit()
 
             raise manager_exceptions.ConflictError(
-                '{0} already exists on {1}'.format(
+                '{0} already exists on {1} or with global availability'.format(
                     instance,
                     self.current_tenant
                 )
@@ -403,14 +432,18 @@ class SQLStorageManager(object):
             element_id,
             include=None,
             filters=None,
-            locking=False):
+            locking=False,
+            include_global=True):
         """Return a single result based on the model class and element ID
         """
         current_app.logger.debug(
             'Get `{0}` with ID `{1}`'.format(model_class.__name__, element_id)
         )
         filters = filters or {'id': element_id}
-        query = self._get_query(model_class, include, filters)
+        query = self._get_query(model_class,
+                                include,
+                                filters,
+                                include_global=include_global)
         if locking:
             query = query.with_for_update()
         result = query.first()
@@ -444,7 +477,8 @@ class SQLStorageManager(object):
              filters=None,
              pagination=None,
              sort=None,
-             all_tenants=None):
+             all_tenants=None,
+             include_global=True):
         """Return a (possibly empty) list of `model_class` results
         """
         self._validate_available_memory()
@@ -459,7 +493,8 @@ class SQLStorageManager(object):
                                 include,
                                 filters,
                                 sort,
-                                all_tenants)
+                                all_tenants,
+                                include_global)
 
         results, total, size, offset = self._paginate(query, pagination)
         pagination = {'total': total, 'size': size, 'offset': offset}
