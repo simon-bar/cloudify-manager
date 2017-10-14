@@ -357,6 +357,11 @@ class BlueprintsManager(object):
                          parameters=None,
                          allow_custom_parameters=False,
                          force=False, bypass_maintenance=None):
+        system_wide_wf_mapping = parameters.get('system_wide_workflow', None) if parameters else None
+        if system_wide_wf_mapping is not None:
+            del parameters['system_wide_workflow']
+            return self._execute_system_workflow(workflow_id, system_wide_wf_mapping,
+                    execution_parameters=parameters, bypass_maintenance=bypass_maintenance)[1]
         deployment = self.get_deployment(deployment_id)
         blueprint = self.get_blueprint(deployment.blueprint_id)
 
