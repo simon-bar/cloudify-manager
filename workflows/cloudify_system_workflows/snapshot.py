@@ -549,7 +549,7 @@ def _restore_elasticsearch(tempdir, es, metadata, bulk_read_timeout):
     elasticsearch.helpers.bulk(es,
                                data_iter,
                                request_timeout=bulk_read_timeout)
-    es.indices.flush()
+    es.indices.flush(wait_if_ongoing=True)
 
     return new_plugins
 
@@ -671,7 +671,7 @@ def _restore_snapshot(config, tempdir, metadata, elasticsearch_read_timeout):
     # credentials
     _restore_credentials_3_3(tempdir, es)
 
-    es.indices.flush()
+    es.indices.flush(wait_if_ongoing=True)
 
     # agents
     _restore_agents_data(tempdir)
